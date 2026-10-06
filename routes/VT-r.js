@@ -1,119 +1,133 @@
-var express = require("express");
-var router = express.Router();
-const axios = require("axios");
-const NodeCache = require("node-cache");
+const express = require('express');
+const router = express.Router();
+const axios = require('axios');
+const NodeCache = require('node-cache');
 
-const config = require("config");
-const fs = require("fs");
-const cors = require("cors");
-const MBTiles = require("@mapbox/mbtiles");
-const TimeFormat = require("hh-mm-ss");
+const config = require('config');
+const fs = require('node:fs');
+const path = require('node:path');
+const zlib = require('node:zlib');
+const { promisify } = require('node:util');
+const { PMTiles } = require('pmtiles');
+
+const gzip = promisify(zlib.gzip);
 
 // config constants
-const defaultZ = config.get("defaultZ");
-const mbtilesDir = config.get("mbtilesDir");
+const defaultZ = config.get('defaultZ');
+const pmtilesDir = config.get('pmtilesDir');
+const generateTokenUrl = config.get('generateTokenUrl');
+const serverUrl = config.get('serverUrl');
+const whiteList = config.get('whiteList');
 
 // global variables
-let mbtilesPool = {};
-let tz = config.get("tz");
-let sTileName = config.get("sTileName");
-let busy = false;
+const pmtilesPool = {};
+const tz = config.get('tz');
+const sTileName = config.get('sTileName');
+const projectRoot = path.resolve(__dirname, '..');
 
-//var app = express()
-//app.use(cors())
-
-//Get tile functions
-const getMBTiles = async (t, z, x, y) => {
-  let mbtilesPath = "";
-  let mbtilesPath2 = "";
-  let mbtilesPath3 = "";
-  if (!tz[t]) tz[t] = defaultZ;
-  let tz2 = tz[t] - 1;
-  let tz3 = tz[t] - 2;
-  if (z < tz[t]) {
-    if (sTileName[t]) {
-      let stname = sTileName[t];
-      mbtilesPath = `${mbtilesDir}/${t}/${stname}.mbtiles`;
-      mbtilesPath2 = `${mbtilesDir}/${t}/${stname}.mbtiles`;
-      mbtilesPath3 = `${mbtilesDir}/${t}/${stname}.mbtiles`;
-    } else {
-      mbtilesPath = `${mbtilesDir}/${t}/0-0-0.mbtiles`;
-      mbtilesPath2 = `${mbtilesDir}/${t}/0-0-0.mbtiles`;
-      mbtilesPath3 = `${mbtilesDir}/${t}/0-0-0.mbtiles`;
-    }
-  } else {
-    mbtilesPath = `${mbtilesDir}/${t}/${tz[t]}-${x >> (z - tz[t])}-${
-      y >> (z - tz[t])
-    }.mbtiles`;
-    mbtilesPath2 = `${mbtilesDir}/${t}/${tz2}-${x >> (z - tz2)}-${
-      y >> (z - tz2)
-    }.mbtiles`;
-    mbtilesPath3 = `${mbtilesDir}/${t}/${tz3}-${x >> (z - tz3)}-${
-      y >> (z - tz3)
-    }.mbtiles`;
+class LocalPMTilesSource {
+  constructor(archivePath) {
+    this.archivePath = archivePath;
+    this.handlePromise = fs.promises.open(archivePath, 'r');
   }
-  return new Promise((resolve, reject) => {
-    if (mbtilesPool[mbtilesPath]) {
-      resolve(mbtilesPool[mbtilesPath].mbtiles);
-    } else if (mbtilesPool[mbtilesPath2]) {
-      resolve(mbtilesPool[mbtilesPath2].mbtiles);
-    } else if (mbtilesPool[mbtilesPath3]) {
-      resolve(mbtilesPool[mbtilesPath3].mbtiles);
-    } else {
-      if (fs.existsSync(mbtilesPath)) {
-        new MBTiles(`${mbtilesPath}?mode=ro`, (err, mbtiles) => {
-          if (err) {
-            reject(new Error(`${mbtilesPath} could not open.`));
-          } else {
-            mbtilesPool[mbtilesPath] = {
-              mbtiles: mbtiles,
-              openTime: new Date(),
-            };
-            resolve(mbtilesPool[mbtilesPath].mbtiles);
-          }
-        });
-      } else if (fs.existsSync(mbtilesPath2)) {
-        new MBTiles(`${mbtilesPath2}?mode=ro`, (err, mbtiles) => {
-          if (err) {
-            reject(new Error(`${mbtilesPath2} could not open.`));
-          } else {
-            mbtilesPool[mbtilesPath2] = {
-              mbtiles: mbtiles,
-              openTime: new Date(),
-            };
-            resolve(mbtilesPool[mbtilesPath2].mbtiles);
-          }
-        });
-      } else if (fs.existsSync(mbtilesPath3)) {
-        new MBTiles(`${mbtilesPath3}?mode=ro`, (err, mbtiles) => {
-          if (err) {
-            reject(new Error(`${mbtilesPath3} could not open.`));
-          } else {
-            mbtilesPool[mbtilesPath3] = {
-              mbtiles: mbtiles,
-              openTime: new Date(),
-            };
-            resolve(mbtilesPool[mbtilesPath3].mbtiles);
-          }
-        });
-        //edit until here
-      } else {
-        reject(new Error(`${mbtilesPath} was not found.`));
-      }
+
+  getKey() {
+    return this.archivePath;
+  }
+
+  async getBytes(offset, length, signal) {
+    if (signal?.aborted) {
+      throw new Error('Tile request aborted.');
     }
-  });
+
+    const handle = await this.handlePromise;
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, offset);
+
+    return {
+      data: buffer.buffer.slice(
+        buffer.byteOffset,
+        buffer.byteOffset + bytesRead,
+      ),
+    };
+  }
+}
+
+// Get tile functions
+const getPMTiles = async (t, z, x, y) => {
+  // ex. t = UniteStreetMapVector
+  let pmtilesPathSmall = '';
+  let pmtilesPath1 = '';
+  let pmtilesPath2 = '';
+  let pmtilesPath3 = '';
+
+  if (!tz[t]) tz[t] = defaultZ;
+
+  const tz2 = tz[t] - 1;
+  const tz3 = tz[t] - 2;
+  const tilesetDir = path.resolve(projectRoot, pmtilesDir, t);
+
+  // if contour, there is no sTileName[t]
+  if (sTileName[t]) {
+    pmtilesPathSmall = path.join(tilesetDir, `${sTileName[t]}.pmtiles`);
+  }
+
+  if (z < tz[t]) {
+    pmtilesPath1 = pmtilesPathSmall;
+    pmtilesPath2 = pmtilesPathSmall;
+    pmtilesPath3 = pmtilesPathSmall;
+  } else {
+    pmtilesPath1 = path.join(
+      tilesetDir,
+      `${tz[t]}-${x >> (z - tz[t])}-${y >> (z - tz[t])}.pmtiles`,
+    );
+    pmtilesPath2 = path.join(
+      tilesetDir,
+      `${tz2}-${x >> (z - tz2)}-${y >> (z - tz2)}.pmtiles`,
+    );
+    pmtilesPath3 = path.join(
+      tilesetDir,
+      `${tz3}-${x >> (z - tz3)}-${y >> (z - tz3)}.pmtiles`,
+    );
+  }
+
+  const candidates = [
+    ...new Set([pmtilesPath1, pmtilesPath2, pmtilesPath3].filter(Boolean)),
+  ];
+  // ex, pmtilesPath1 = /home/20260413coesite4PmtilesLocaltest/pmtiles/UniteStreetMapVector/6-35-31.pmtiles
+  // pmtilesPath2 = /home/20260413coesite4PmtilesLocaltest/pmtiles/UniteStreetMapVector/5-17-15.pmtiles
+  // pmtilesPath3 = /home/20260413coesite4PmtilesLocaltest/pmtiles/UniteStreetMapVector/4-8-7.pmtiles
+
+  const cachedPath = candidates.find(candidate => pmtilesPool[candidate]);
+
+  if (cachedPath) {
+    return pmtilesPool[cachedPath];
+  }
+
+  const existingPath = candidates.find(candidate => fs.existsSync(candidate));
+
+  if (existingPath) {
+    pmtilesPool[existingPath] = {
+      pmtiles: new PMTiles(new LocalPMTilesSource(existingPath)),
+      // mtime of the .pmtiles file, used for the Last-Modified header
+      lastModified: fs.statSync(existingPath).mtime.toUTCString(),
+    };
+    return pmtilesPool[existingPath];
+  }
+
+  throw new Error(`${candidates[0] || tilesetDir} was not found.`);
 };
 
-const getTile = async (mbtiles, z, x, y) => {
-  return new Promise((resolve, reject) => {
-    mbtiles.getTile(z, x, y, (err, tile, headers) => {
-      if (err) {
-        reject();
-      } else {
-        resolve({ tile: tile, headers: headers });
-      }
-    });
-  });
+const getTile = async (pmtiles, z, x, y) => {
+  try {
+    const r = await pmtiles.getZxyAttempt(z, x, y);
+    if (!r) return null;
+    return {
+      tile: Buffer.from(r.data),
+    };
+  } catch (err) {
+    throw err;
+  }
 };
 
 // Creating a token cache.
@@ -121,155 +135,163 @@ const getTile = async (mbtiles, z, x, y) => {
 // Expired data is cleaned up every 120 seconds.
 const tokenCache = new NodeCache({ stdTTL: 30, checkperiod: 120 });
 const tokenIPSet = new Set(); // To record IP
-const ipTimeoutMap = new Map(); // IP → Timeout ID
+const ipTimeoutMap = new Map(); // IP -> Timeout ID
 
 function addOrRefreshIP(ip, ttlMs = 60 * 1000) {
+  if (!ip) return;
+
   // If the IP is registered, remove it.
   if (ipTimeoutMap.has(ip)) {
-    // console.log(`🔄 IP renew: ${ip}, ID: ${ipTimeoutMap.get(ip)}`);
     clearTimeout(ipTimeoutMap.get(ip));
   }
 
   // Adding IP to Set
   tokenIPSet.add(ip);
-  // console.log(`🌟 IP登録・更新: ${ip}`);
 
   const timeoutId = setTimeout(() => {
     tokenIPSet.delete(ip);
     ipTimeoutMap.delete(ip);
-    // console.log(`💨 TTL切れでIP削除: ${ip}`);
   }, ttlMs);
 
-  // Mapに保存（更新）
+  // Save in Map for future updates.
   ipTimeoutMap.set(ip, timeoutId);
 }
 
-/* GET Tile. */
-//router.get('/',
-// async function(req, res, next) {
-router.get(`/zxy/:t/:z/:x/:y.pbf`, async function (req, res) {
-  busy = true;
-  const t = req.params.t;
-  const z = parseInt(req.params.z);
-  const x = parseInt(req.params.x);
-  const y = parseInt(req.params.y);
-
+function getClientIP(req) {
   const rawIP = req.socket?.remoteAddress;
-  const clientIP =
-    typeof rawIP === "string" && rawIP.startsWith("::ffff:")
-      ? rawIP.replace(/^::ffff:/, "")
-      : rawIP;
-  // console.log("✅rawIP: ", rawIP);
-  // console.log("✅clientIP: ", clientIP);
 
-  let token = null;
-  if (req.query && req.query.token) {
-    token = req.query.token;
+  if (typeof rawIP === 'string' && rawIP.startsWith('::ffff:')) {
+    return rawIP.replace(/^::ffff:/, '');
   }
 
+  return rawIP;
+}
+
+async function validateToken(token, clientIP) {
   let isTokenValid = false;
 
   // Only if a token exists, the following code checks its validity.
-  if (token) {
-    let cleanedToken = token;
-    // 1. First, check if there is valid token information in the cache.
-    if (tokenCache.has(token)) {
-      isTokenValid = tokenCache.get(token);
-      // console.log(`CACHE HIT! ⚡️ Retrieved token (${token.substring(0, 10)}...) validation result from cache! Valid: ${isTokenValid}`);
-    } else {
-      // 2. If not found in cache, check via API as usual
-      // console.log(`CACHE MISS... 😢 Validating token (${token.substring(0, 10)}...) via API`);
+  if (!token) return isTokenValid;
 
-      const parts = token.split("?token=");
-      if (parts.length > 1 && parts[0] === parts[1]) {
-        cleanedToken = parts[0];
-      }
-      // console.log('✅ Clean token:', token);
-      const generateTokenUrl = `https://dev-geoportal.dfs.un.org/arcgis/sharing/rest/generateToken`;
-      const params = new URLSearchParams({
-        token: cleanedToken,
-        serverUrl: "https://dev-geoportal.dfs.un.org/unvt/rest/services",
-        f: "json",
-      }).toString();
-      const fullUrl = `${generateTokenUrl}?${params}`;
-      // console.log('✅fullUrl: ', fullUrl);
-      try {
-        const response = await axios.get(fullUrl);
-        // console.log('✅ generateToken response:', response.data);
-        if (response.data && !response.data.error) {
-          isTokenValid = true;
-          // tokenIPSet.add(clientIP);
-          addOrRefreshIP(clientIP); // ★ここでIP登録・更新
-        }
-      } catch (error) {
-        isTokenValid = false;
-      }
-
-      // 3. Save the validation result from the API to the cache
-      // console.log('✅ Cached token:', token);
-      tokenCache.set(token, isTokenValid);
-      // console.log(
-      //   `Stored API validation result in cache! Valid: ${isTokenValid}`
-      // );
-    }
-    // console.log('✅isTokenValid: ', isTokenValid);
+  // 1. First, check if there is valid token information in the cache.
+  if (tokenCache.has(token)) {
+    isTokenValid = tokenCache.get(token);
+    if (isTokenValid) addOrRefreshIP(clientIP);
+    return isTokenValid;
   }
 
-  //if (!req.session.userId) {
-  var whiteList = [
-    "https://ubukawa.github.io/cors-cookie",
-    "https://dev-geoportal.dfs.un.org/",
-  ];
-  const noSession = !req.session?.userId;
-  const invalidReferer = !(
-    req.headers.referer &&
-    whiteList.some((value) => req.headers.referer.includes(value))
-  );
-  const invalidToken = !(token && isTokenValid);
-  const ipAllowed = !token && tokenIPSet.has(clientIP);
-  // console.log("✅tokenIPSet.has(clientIP): ", tokenIPSet.has(clientIP));
+  // 2. If not found in cache, check via API as usual.
+  let cleanedToken = token;
+  const parts = token.split('?token=');
+  if (parts.length > 1 && parts[0] === parts[1]) {
+    cleanedToken = parts[0];
+  }
 
-  if (noSession && invalidReferer && invalidToken && !ipAllowed) {
-    // Redirect unauthenticated requests to home page
-    // res.redirect('/')
-    res.status(401).send(`Please log in to get: /zxy/${t}/${z}/${x}/${y}.pbf`);
-    // busy = false
-  } else {
-    //  let params = {
-    //    active: { home: true }
+  // const generateTokenUrl =
+  //   'https://dev-geoportal.dfs.un.org/arcgis/sharing/rest/generateToken';
+  const params = new URLSearchParams({
+    token: cleanedToken,
+    // serverUrl: 'https://dev-geoportal.dfs.un.org/unvt/rest/services',
+    serverUrl: serverUrl,
+    f: 'json',
+  }).toString();
+  const fullUrl = `${generateTokenUrl}?${params}`;
 
-    getMBTiles(t, z, x, y)
-      .then((mbtiles) => {
-        getTile(mbtiles, z, x, y)
-          .then((r) => {
-            if (r.tile) {
-              res.set("content-type", "application/vnd.mapbox-vector-tile");
-              res.set("content-encoding", "gzip");
-              res.set("last-modified", r.headers["Last-Modified"]);
-              res.set("etag", r.headers["ETag"]);
-              res.send(r.tile);
-              busy = false;
-            } else {
-              res
-                .status(404)
-                .send(`tile not found: /zxy/${t}/${z}/${x}/${y}.pbf`);
-              busy = false;
-            }
-          })
-          .catch((e) => {
-            res
-              .status(404)
-              .send(
-                `tile not found (getTile error): /zxy/${t}/${z}/${x}/${y}.pbf`
-              );
-            busy = false;
-          });
-      })
-      .catch((e) => {
-        res
-          .status(404)
-          .send(`mbtiles not found for /zxy/${t}/${z}/${x}/${y}.pbf`);
-      });
+  try {
+    const response = await axios.get(fullUrl);
+    if (response.data && !response.data.error) {
+      isTokenValid = true;
+      addOrRefreshIP(clientIP);
+    }
+  } catch (error) {
+    isTokenValid = false;
+  }
+
+  // 3. Save the validation result from the API to the cache.
+  tokenCache.set(token, isTokenValid);
+  return isTokenValid;
+}
+
+function validateTileRequest(t, z, x, y, res) {
+  // Input validation - Security enhancement to prevent path traversal and invalid tile requests
+  // Restrict tileset name to alphanumeric characters, hyphens, and underscores only
+  if (!t || typeof t !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(t)) {
+    res.status(400).send('Invalid tileset name');
+    return false;
+  }
+  // Validate zoom level within reasonable bounds (0-30) to prevent resource exhaustion
+  if (isNaN(z) || z < 0 || z > 30) {
+    res.status(400).send('Invalid zoom level');
+    return false;
+  }
+  // Validate X coordinate is within valid range for the zoom level
+  if (isNaN(x) || x < 0 || x >= Math.pow(2, z)) {
+    res.status(400).send('Invalid x coordinate');
+    return false;
+  }
+  // Validate Y coordinate is within valid range for the zoom level
+  if (isNaN(y) || y < 0 || y >= Math.pow(2, z)) {
+    res.status(400).send('Invalid y coordinate');
+    return false;
+  }
+
+  return true;
+}
+
+/* GET Tile. */
+router.get(`/zxy/:t/:z/:x/:y.pbf`, async function (req, res) {
+  try {
+    const t = req.params.t;
+    const z = parseInt(req.params.z, 10);
+    const x = parseInt(req.params.x, 10);
+    const y = parseInt(req.params.y, 10);
+
+    if (!validateTileRequest(t, z, x, y, res)) return;
+
+    const clientIP = getClientIP(req);
+    const token = req.query?.token || null;
+    const isTokenValid = await validateToken(token, clientIP);
+
+    // if (!req.session.userId) {
+    // const whiteList = [
+    //   // 'https://ubukawa.github.io/cors-cookie',
+    //   'https://dev-geoportal.dfs.un.org/',
+    // ];
+    const noSession = !req.session?.userId;
+    const invalidReferer = !(
+      req.headers.referer &&
+      whiteList.some(value => req.headers.referer.includes(value))
+    );
+    const invalidToken = !(token && isTokenValid);
+    const ipAllowed = !token && tokenIPSet.has(clientIP);
+
+    if (noSession && invalidReferer && invalidToken && !ipAllowed) {
+      // Redirect unauthenticated requests to home page
+      // res.redirect('/')
+      res
+        .status(401)
+        .send(`Please log in to get: /zxy/${t}/${z}/${x}/${y}.pbf`);
+      return;
+    }
+
+    const { pmtiles, lastModified } = await getPMTiles(t, z, x, y);
+    const r = await getTile(pmtiles, z, x, y);
+
+    if (r && r.tile) {
+      res.set('content-type', 'application/vnd.mapbox-vector-tile');
+
+      if (lastModified) {
+        res.set('last-modified', lastModified);
+      }
+
+      // pmtiles returns decompressed tiles, so re-compress them (same as the MBTiles version)
+      res.set('content-encoding', 'gzip');
+      res.send(await gzip(r.tile));
+    } else {
+      throw new Error(`tile not found: /zxy/${t}/${z}/${x}/${y}.pbf`);
+    }
+  } catch (err) {
+    res.status(404).send(err.message);
   }
 });
 

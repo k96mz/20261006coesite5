@@ -1,6 +1,6 @@
 {
-  "name": "coesite4",
-  "version": "0.0.0",
+  "name": "coesite5",
+  "version": "0.0.1",
   "description": "A vector tile server",
   "main": "app.js",
   "scripts": {
@@ -8,16 +8,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/unvt/coesite4.git"
+    "url": "git+https://github.com/unvt/coesite5.git"
   },
   "dependencies": {
     "@azure/msal-node": "^3.3.0",
-    "@mapbox/mbtiles": "^0.12.1",
     "@microsoft/microsoft-graph-client": "^3.0.0",
     "axios": "^1.10.0",
     "config": "^3.3.6",
     "connect-flash": "^0.1.1",
-    "cookie-parser": "~1.4.4",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.17.1",
@@ -25,13 +23,11 @@
     "express-promise-router": "^4.1.0",
     "express-session": "^1.17.2",
     "hbs": "^4.1.2",
-    "hh-mm-ss": "^1.2.0",
     "hjson": "^3.2.2",
-    "http-errors": "^2.0.0",
     "isomorphic-fetch": "^3.0.0",
     "morgan": "^1.10.0",
     "node-cache": "^5.1.2",
-    "spdy": "^4.0.2",
+    "pmtiles": "^4.5.0",
     "winston": "^3.3.3",
     "winston-daily-rotate-file": "^5.0.0"
   }

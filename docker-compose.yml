@@ -1,10 +1,10 @@
-version: "3.8"
+version: '3.8'
 
 services:
   app:
     build: .
     ports:
-      - "3000:3000"
+      - '3000:3000'
     environment:
       - OAUTH_CLIENT_ID=your_app_client_id
       - OAUTH_CLIENT_SECRET=your_secret
@@ -14,11 +14,11 @@ services:
       - MYSQL_HOST=mysql
       - MYSQL_USER=coesite_user
       - MYSQL_PASSWORD=password
-      - MYSQL_DATABASE=coesite4_sessions
+      - MYSQL_DATABASE=coesite5_sessions
       - USE_HTTP=true
       - DEV_MODE=true
     volumes:
-      - ./mbtiles:/app/mbtiles
+      - ./pmtiles:/app/pmtiles
       - ./config:/app/config
       - ./log:/app/log
     depends_on:
@@ -28,10 +28,10 @@ services:
   mysql:
     image: mysql:5.7
     ports:
-      - "3306:3306"
+      - '3306:3306'
     environment:
       - MYSQL_ROOT_PASSWORD=rootpassword
-      - MYSQL_DATABASE=coesite4_sessions
+      - MYSQL_DATABASE=coesite5_sessions
       - MYSQL_USER=coesite_user
       - MYSQL_PASSWORD=password
     volumes:

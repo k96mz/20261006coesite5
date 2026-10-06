@@ -1,29 +1,27 @@
 {
- morganFormat: tiny
- htdocsPath: public
- privkeyPath: (somewhere)/privkey.pem
- fullchainPath: (somewhere)/cert.pem
- logDirPath: log
- port: 443
- tz:{
-  UniteStreetMapVector: 6 
-  contour: 6
- }
-  tRz:{
-  srtm: 6 
- }
- sTileName:{
-  UniteStreetMapVector: small-scale
- }
- defaultZ: 6
- mbtilesDir: mbtiles
+  morganFormat: tiny
+  privkeyPath: (somewhere)/privkey.pem
+  fullchainPath: (somewhere)/cert.pem
+  logDirPath: log
+  port: 443
+  tz:{
+    UniteStreetMapVector: 6 
+    contour: 6
+  }
+  sTileName:{
+    UniteStreetMapVector: small-scale
+  }
+  defaultZ: 6
+  pmtilesDir: pmtiles
   esriDir: esri
- esri-tilemap-min:{
-  UniteStreetMapVector: 0
- }
- esri-tilemap-max:{
-  UniteStreetMapVector: 15
- }
-
+  esri-tilemap-min:{
+    UniteStreetMapVector: 0
+  }
+  esri-tilemap-max:{
+    UniteStreetMapVector: 15
+  }
+  generateTokenUrl: 'https://dev-geoportal.dfs.un.org/arcgis/sharing/rest/generateToken'
+  serverUrl: 'https://dev-geoportal.dfs.un.org/unvt/rest/services'
+  whiteList: ['https://dev-geoportal.dfs.un.org/']
 }
 

@@ -1,34 +1,28 @@
-require("dotenv").config();
+require('dotenv').config();
 
 //for Server fnction
-const session = require("express-session");
-const MySQLStore = require("express-mysql-session")(session); //Added for session store in mysql
-const flash = require("connect-flash");
-const msal = require("@azure/msal-node");
-var createError = require("http-errors");
-const express = require("express");
-const path = require("path");
-var cookieParser = require("cookie-parser");
-const morgan = require("morgan");
-const winston = require("winston");
-const DailyRotateFile = require("winston-daily-rotate-file");
-const spdy = require("spdy"); //for https
+const session = require('express-session');
+const MySQLStore = require('express-mysql-session')(session); //Added for session store in mysql
+const flash = require('connect-flash');
+const msal = require('@azure/msal-node');
+const express = require('express');
+const path = require('path');
+const morgan = require('morgan');
+const winston = require('winston');
+const DailyRotateFile = require('winston-daily-rotate-file');
+const https = require('node:https');
 
 //for File processing
-const config = require("config");
-const fs = require("fs");
-const cors = require("cors");
+const config = require('config');
+const fs = require('node:fs');
+const cors = require('cors');
 
 // config constants
-const morganFormat = config.get("morganFormat");
-const logDirPath = config.get("logDirPath");
-const port = config.get("port");
-const privkeyPath = config.get("privkeyPath");
-const fullchainPath = config.get("fullchainPath");
-
-const htdocsPath = config.get("htdocsPath");
-const defaultZ = config.get("defaultZ");
-const mbtilesDir = config.get("mbtilesDir");
+const morganFormat = config.get('morganFormat');
+const logDirPath = config.get('logDirPath');
+const port = config.get('port');
+const privkeyPath = config.get('privkeyPath');
+const fullchainPath = config.get('fullchainPath');
 
 // logger configuration
 const logger = winston.createLogger({
@@ -36,13 +30,13 @@ const logger = winston.createLogger({
     new winston.transports.Console(),
     new DailyRotateFile({
       filename: `${logDirPath}/coesite-%DATE%.log`,
-      datePattern: "YYYY-MM-DD",
+      datePattern: 'YYYY-MM-DD',
     }),
   ],
 });
 
 logger.stream = {
-  write: (message) => {
+  write: message => {
     logger.info(message.trim());
   },
 };
@@ -54,7 +48,7 @@ if (devMode) {
   console.log('🔧 Development mode enabled - Authentication will be skipped');
 }
 
-var authRouter = require("./routes/auth"); //before app
+const authRouter = require('./routes/auth'); //before app
 const app = express();
 // In-memory storage of logged-in users
 // we will use a simple in-memory array, but in a real app,
@@ -65,7 +59,7 @@ app.locals.users = {};
 if (devMode) {
   const devUserId = 'dev-user-id';
   app.locals.users[devUserId] = {
-    displayName: 'Development User'
+    displayName: 'Development User',
   };
 }
 
@@ -97,15 +91,14 @@ const msalConfig = {
 app.locals.msalClient = new msal.ConfidentialClientApplication(msalConfig);
 //(before indexRouter) until here
 
-var indexRouter = require("./routes/index");
-var mapLRouter = require("./routes/map-l"); //test 0104
-var webmapLRouter = require("./routes/webmap-l");
-var webmap3DRouter = require("./routes/webmap-3d");
-var VTRouter = require("./routes/VT"); //test 0308
-//var VTRouter = require('./routes/VT-r') //referer test
-//var VTORouter = require('./routes/VT-open') //test 0322(only for development env.)
-var esriIFRouter = require("./routes/esriIF"); //esri interface (tilemap, etc..)
-var rgbElevRouter = require("./routes/rgbElev");
+const indexRouter = require('./routes/index');
+const mapLRouter = require('./routes/map-l');
+const webmapLRouter = require('./routes/webmap-l');
+const webmap3DRouter = require('./routes/webmap-3d');
+const VTRouter = require('./routes/VT-r'); //referer
+//const VTORouter = require('./routes/VT-open') //only for development env.
+const esriIFRouter = require('./routes/esriIF'); //esri interface (tilemap, etc..)
+const rgbElevRouter = require('./routes/rgbElev');
 
 /*
 // Session middleware
@@ -124,7 +117,7 @@ app.use(session({
 //session with mysql (from here)
 const mysqlOptions = {
   // Enable to change the hostname of MySQL by environment variable
-  host: process.env.MYSQL_HOST || "localhost",
+  host: process.env.MYSQL_HOST || 'localhost',
   port: 3306,
   user: process.env.MYSQL_USER,
   password: process.env.MYSQL_PASSWORD,
@@ -161,13 +154,13 @@ if (devMode) {
 app.use(function (req, res, next) {
   // Read any flashed errors and save
   // in the response locals
-  res.locals.error = req.flash("error_msg");
+  res.locals.error = req.flash('error_msg');
 
   // Check for simple error string and
   // convert to layout's expected format
-  var errs = req.flash("error");
-  for (var i in errs) {
-    res.locals.error.push({ message: "An error occurred", debug: errs[i] });
+  const errs = req.flash('error');
+  for (let i in errs) {
+    res.locals.error.push({ message: 'An error occurred', debug: errs[i] });
   }
 
   // Check for an authenticated user and load
@@ -180,16 +173,15 @@ app.use(function (req, res, next) {
 });
 
 // view engine setup
-app.set("unvt/views", path.join(__dirname, "views"));
-app.set("view engine", "hbs");
+app.set('unvt/views', path.join(__dirname, 'views'));
+app.set('view engine', 'hbs');
 app.use(
   morgan(morganFormat, {
     stream: logger.stream,
-  })
+  }),
 );
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser());
 
 /*
 // for credential
@@ -205,16 +197,16 @@ app.use(cors());
 
 //app.use(express.static(path.join(__dirname, htdocsPath)))
 
-app.use("/unvt", express.static("public"));
-app.use("/unvt/", indexRouter);
-app.use("/unvt/auth", authRouter); //after app.use('/', indexRouter)
-app.use("/unvt/map-l", mapLRouter);
-app.use("/unvt/webmap-l", webmapLRouter);
-app.use("/unvt/webmap-3d", webmap3DRouter);
-app.use("/unvt/VT", VTRouter);
+app.use('/unvt', express.static('public'));
+app.use('/unvt/', indexRouter);
+app.use('/unvt/auth', authRouter); //after app.use('/', indexRouter)
+app.use('/unvt/map-l', mapLRouter);
+app.use('/unvt/webmap-l', webmapLRouter);
+app.use('/unvt/webmap-3d', webmap3DRouter);
+app.use('/unvt/VT', VTRouter);
 //app.use('/unvt/VT-open', VTORouter)
-app.use("/unvt/rest/services/esriIF", esriIFRouter); //esri interface
-app.use("/unvt/rgb-elev", rgbElevRouter);
+app.use('/unvt/rest/services/esriIF', esriIFRouter); //esri interface
+app.use('/unvt/rgb-elev', rgbElevRouter);
 
 // error handler
 app.use((req, res) => {
@@ -224,11 +216,11 @@ app.use((req, res) => {
 app.use(function (err, req, res, next) {
   // set locals, only providing error in development
   res.locals.message = err.message;
-  res.locals.error = req.app.get("env") === "development" ? err : {};
+  res.locals.error = req.app.get('env') === 'development' ? err : {};
 
   // render the error page
   res.status(err.status || 500);
-  res.render("error");
+  res.render('error');
 });
 
 // Server startup
@@ -242,13 +234,13 @@ if (useHttp && fs.existsSync(privkeyPath) && fs.existsSync(fullchainPath)) {
   });
 } else {
   // Start as HTTPS server
-  spdy
+  https
     .createServer(
       {
         key: fs.readFileSync(privkeyPath),
         cert: fs.readFileSync(fullchainPath),
       },
-      app
+      app,
     )
     .listen(port, () => {
       console.log(`HTTPS server running at Port ${port} ...`);
